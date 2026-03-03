@@ -10,6 +10,7 @@ const { init: initResults, startResultsScheduler } = require('./results');
 const { initCache } = require('./odds-cache');
 
 
+// Initialize Excel - will create new file if missing, or load existing one
 initExcel().catch(err => console.error('Excel init error: ' + err.message));
 
 // Initialize Odds API cache (fetches upcoming matches once on startup)

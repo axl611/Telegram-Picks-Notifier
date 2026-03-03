@@ -17,6 +17,16 @@ const TIPSTER_COLUMNS = ['Date', 'Sport', 'Match', 'Pick', 'Odds', 'Bet', 'Resul
 const GENERAL_COLUMNS = ['Date', 'Tipster', 'Sport', 'Match', 'Pick', 'Odds', 'Bet', 'Result', 'Profit/Loss'];
 
 async function initExcel() {
+    const fs = require('fs');
+    
+    // Check if file already exists
+    if (fs.existsSync(EXCEL_FILE)) {
+        console.log('Excel file already exists: ' + EXCEL_FILE);
+        // Use ensureSchema to load and verify the existing file
+        await ensureSchema();
+        return;
+    }
+    
     const workbook = new ExcelJS.Workbook();
 
     // Create tipster sheets
@@ -420,14 +430,12 @@ async function addPick(pickData) {
         newRow.getCell(9).numFmt = '$#,##0.00';
         
         // Add data validation to Result column (G) - dropdown with W, L, P
-        if (!tipsterSheet.dataValidations.dataValidation.find(dv => dv.sqref && dv.sqref.toString().includes(`G${rowNum}`))) {
-            const resultValidation = tipsterSheet.dataValidations.add({
-                type: 'list',
-                formula1: '"W,L,P"',
-                showDropDown: true,
-                sqref: `G${rowNum}`
-            });
-        }
+        tipsterSheet.dataValidations.add({
+            type: 'list',
+            formula1: '"W,L,P"',
+            showDropDown: true,
+            sqref: `G${rowNum}`
+        });
     }
 
     // Add to General sheet
@@ -452,14 +460,12 @@ async function addPick(pickData) {
         newGeneralRow.getCell(9).numFmt = '$#,##0.00';
         
         // Add data validation to Result column (H) - dropdown with W, L, P
-        if (!generalSheet.dataValidations.dataValidation.find(dv => dv.sqref && dv.sqref.toString().includes(`H${genRowNum}`))) {
-            generalSheet.dataValidations.add({
-                type: 'list',
-                formula1: '"W,L,P"',
-                showDropDown: true,
-                sqref: `H${genRowNum}`
-            });
-        }
+        generalSheet.dataValidations.add({
+            type: 'list',
+            formula1: '"W,L,P"',
+            showDropDown: true,
+            sqref: `H${genRowNum}`
+        });
     }
 
     await workbook.xlsx.writeFile(EXCEL_FILE);
