@@ -284,7 +284,6 @@ async function scheduleResultCheck(tipster, date, match, pick, odds, sport) {
                 }
 
                 let found = false;
-                let balance = 0;
 
                 // Find and update in tipster sheet
                 tipsterSheet.eachRow((row, rowNum) => {
@@ -294,19 +293,8 @@ async function scheduleResultCheck(tipster, date, match, pick, odds, sport) {
                     const rowMatch = (row.getCell(3).value || '').toString();
 
                     if (rowDate === date && rowMatch === match) {
-                        row.getCell(7).value = result;      // Result column
-                        row.getCell(8).value = pl;          // Profit/Loss column
-
-                        // Calculate running balance
-                        balance = 0;
-                        tipsterSheet.eachRow((r, rn) => {
-                            if (rn === 1 || rn > rowNum) return;
-                            const v = parseFloat(r.getCell(8).value);
-                            if (!isNaN(v)) balance += v;
-                        });
-                        balance += pl;
-
-                        row.getCell(9).value = balance;      // Balance column
+                        row.getCell(7).value = result;      // Result column ONLY
+                        // Profit/Loss (column 8) and Balance (column 9) are formula-based - they auto-calculate
 
                         // Color the result cell
                         const colors = { 'W': 'FF92D050', 'L': 'FFFF6666', 'P': 'FFFFFF00' };
@@ -326,14 +314,14 @@ async function scheduleResultCheck(tipster, date, match, pick, odds, sport) {
                         const rowMatch = (row.getCell(4).value || '').toString();
 
                         if (rowDate === date && rowTipster === tipster && rowMatch === match) {
-                            row.getCell(8).value = result;   // Result column
-                            row.getCell(9).value = pl;       // Profit/Loss column
+                            row.getCell(8).value = result;   // Result column ONLY
+                            // Profit/Loss (column 9) is formula-based - it auto-calculates
                         }
                     });
 
                     await workbook.xlsx.writeFile(EXCEL_FILE);
 
-                    // Update summary
+                    // Update summary (rebuilds formulas)
                     const { updateSummary } = require('./excel');
                     await updateSummary();
 
@@ -346,8 +334,7 @@ async function scheduleResultCheck(tipster, date, match, pick, odds, sport) {
                         `*Match:* ${match}\n` +
                         `*Pick:* ${pick}\n` +
                         `*Odds:* ${odds}\n` +
-                        `*P&L:* $${pl}\n` +
-                        `*Balance:* $${balance.toFixed(2)}`
+                        `*P&L:* $${pl}`
                     );
                 }
             } else {

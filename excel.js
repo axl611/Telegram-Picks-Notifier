@@ -400,7 +400,34 @@ async function addPick(pickData) {
     // Add to tipster sheet
     const tipsterSheet = workbook.getWorksheet(tipsterName);
     if (tipsterSheet) {
-        tipsterSheet.addRow(rowData);
+        const newRow = tipsterSheet.addRow(rowData);
+        const rowNum = newRow.number;
+        
+        // Add formula to Profit/Loss column (H): IF(G="W",(F-1)*2000,IF(G="L",-2000,0))
+        newRow.getCell(8).value = { formula: `IF(G${rowNum}="W",(F${rowNum}-1)*2000,IF(G${rowNum}="L",-2000,0))` };
+        
+        // Add formula to Balance column (I): running total
+        if (rowNum === 2) {
+            // First data row: Balance = Profit/Loss
+            newRow.getCell(9).value = { formula: `H${rowNum}` };
+        } else {
+            // Subsequent rows: Balance = Previous Balance + This Profit/Loss
+            newRow.getCell(9).value = { formula: `I${rowNum - 1}+H${rowNum}` };
+        }
+        
+        // Format Profit/Loss column as currency
+        newRow.getCell(8).numFmt = '$#,##0.00';
+        newRow.getCell(9).numFmt = '$#,##0.00';
+        
+        // Add data validation to Result column (G) - dropdown with W, L, P
+        if (!tipsterSheet.dataValidations.dataValidation.find(dv => dv.sqref && dv.sqref.toString().includes(`G${rowNum}`))) {
+            const resultValidation = tipsterSheet.dataValidations.add({
+                type: 'list',
+                formula1: '"W,L,P"',
+                showDropDown: true,
+                sqref: `G${rowNum}`
+            });
+        }
     }
 
     // Add to General sheet
@@ -417,7 +444,22 @@ async function addPick(pickData) {
             '',  // result
             ''   // profitloss
         ];
-        generalSheet.addRow(generalRowData);
+        const newGeneralRow = generalSheet.addRow(generalRowData);
+        const genRowNum = newGeneralRow.number;
+        
+        // Add formula to Profit/Loss column (I): IF(H="W",(G-1)*2000,IF(H="L",-2000,0))
+        newGeneralRow.getCell(9).value = { formula: `IF(H${genRowNum}="W",(G${genRowNum}-1)*2000,IF(H${genRowNum}="L",-2000,0))` };
+        newGeneralRow.getCell(9).numFmt = '$#,##0.00';
+        
+        // Add data validation to Result column (H) - dropdown with W, L, P
+        if (!generalSheet.dataValidations.dataValidation.find(dv => dv.sqref && dv.sqref.toString().includes(`H${genRowNum}`))) {
+            generalSheet.dataValidations.add({
+                type: 'list',
+                formula1: '"W,L,P"',
+                showDropDown: true,
+                sqref: `H${genRowNum}`
+            });
+        }
     }
 
     await workbook.xlsx.writeFile(EXCEL_FILE);
@@ -456,15 +498,6 @@ async function updatePickResult(pick, result) {
 
     // Map result to single letter
     const resultLetter = result === 'Win' ? 'W' : result === 'Loss' ? 'L' : 'P';
-    const odds = parseFloat(pick.odds) || 0;
-    let profitLoss = 0;
-
-    if (resultLetter === 'W') {
-        profitLoss = (odds - 1) * BET_AMOUNT;
-    } else if (resultLetter === 'L') {
-        profitLoss = -BET_AMOUNT;
-    }
-    // Push = 0 profit/loss
 
     // Find and update in tipster sheet
     let found = false;
@@ -476,8 +509,8 @@ async function updatePickResult(pick, result) {
         
         // Match by date and match name
         if (rowDate === pick.date && rowMatch === pick.match) {
-            row.getCell(7).value = resultLetter;      // Result column
-            row.getCell(8).value = profitLoss;        // Profit/Loss column
+            row.getCell(7).value = resultLetter;      // Result column only
+            // Profit/Loss (column 8) and Balance (column 9) are now formula-based - no need to update
             found = true;
         }
     });
@@ -497,8 +530,8 @@ async function updatePickResult(pick, result) {
         const rowMatch = row.getCell(4).value;
 
         if (rowDate === pick.date && rowTipster === pick.tipster && rowMatch === pick.match) {
-            row.getCell(8).value = resultLetter;      // Result column
-            row.getCell(9).value = profitLoss;        // Profit/Loss column
+            row.getCell(8).value = resultLetter;      // Result column only
+            // Profit/Loss (column 9) is now formula-based - no need to update
         }
     });
 
