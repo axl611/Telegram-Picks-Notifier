@@ -1,13 +1,13 @@
 // results-checker.js
 // Test script to force W/L/P result checks for the 3 tipster tabs (bypasses the API schedule).
 // The main app uses results.js with sport-specific delays; this script runs on demand and
-// fills the Result column in picks.xlsx for any pick that doesn't have one yet.
-// Run: node results-checker.js           (update Excel)
+// fills the Result column in the Google Sheet for any pick that doesn't have one yet.
+// Run: node results-checker.js           (update Sheet)
 // Run: node results-checker.js --dry-run (show results, don't write)
 
 const https = require('https');
 const config = require('./config');
-const excel = require('./excel');
+const { updatePickResult, getPicksWithoutResults } = require('./sheets');
 const { findMatchFallback } = require('./fallback-scores');
 
 // Sport-specific delays (in milliseconds)
@@ -309,11 +309,10 @@ async function scheduleResultCheck(pick, pickId) {
                 
                 console.log(`[ResultsChecker] Result: ${pick.match} = ${result}`);
                 
-                // Update Excel with result
                 try {
-                    await excel.updatePickResult(pick, result);
+                    await updatePickResult(pick, result);
                 } catch (err) {
-                    console.error(`[ResultsChecker] Error updating Excel:`, err.message);
+                    console.error(`[ResultsChecker] Error updating Sheet:`, err.message);
                 }
             }
             
@@ -347,9 +346,9 @@ function cancelAllChecks() {
 
 // ── Standalone test runner ──
 // Usage:
-//   node results-checker.js              → today's completed games, update Excel
+//   node results-checker.js              → today's completed games, update Sheet
 //   node results-checker.js --dry-run    → today's completed, show results, DON'T write
-//   node results-checker.js --days3      → last 3 days completed, update Excel
+//   node results-checker.js --days3      → last 3 days completed, update Sheet
 async function runStandalone() {
     const args = process.argv.slice(2);
     const dryRun = args.includes('--dry-run');
@@ -359,44 +358,14 @@ async function runStandalone() {
         console.error('[ResultsChecker] ODDS_API_KEY missing in .env');
         process.exit(1);
     }
-    const ExcelJS = require('exceljs');
-    const path = require('path');
-    const EXCEL_FILE = path.join(process.cwd(), 'picks.xlsx');
-    const fs = require('fs');
-    if (!fs.existsSync(EXCEL_FILE)) {
-        console.error('[ResultsChecker] picks.xlsx not found');
-        process.exit(1);
-    }
 
-    if (dryRun) console.log('[ResultsChecker] *** DRY RUN – will NOT write to Excel ***');
+    if (dryRun) console.log('[ResultsChecker] *** DRY RUN – will NOT write to Sheet ***');
 
-    console.log('[ResultsChecker] Loading picks.xlsx (3 tipster tabs + General + Summary)...');
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(EXCEL_FILE);
+    console.log('[ResultsChecker] Loading picks from Google Sheets...');
+    const picksToCheck = await getPicksWithoutResults();
 
-    const TIPSTERS = ['Abuelo', 'Cristian Rey', 'Roberto Rey'];
-    console.log('[ResultsChecker] Scanning for picks with empty Result column...');
-
-    const picksToCheck = [];
-    for (const tipster of TIPSTERS) {
-        const sheet = workbook.getWorksheet(tipster);
-        if (!sheet) continue;
-        sheet.eachRow((row, rowNum) => {
-            if (rowNum === 1) return;
-            const rawDate = row.getCell(1).value;
-            const date = rawDate instanceof Date
-                ? rawDate.getDate() + ' ' + rawDate.toLocaleString('en', { month: 'short' })
-                : (rawDate || '').toString().trim();
-            const sport = (row.getCell(2).value || '').toString().trim();
-            const match = (row.getCell(3).value || '').toString().trim();
-            const resultCell = row.getCell(7).value;
-            if (!date || !match) return;
-            const hasResult = resultCell !== undefined && resultCell !== null && String(resultCell).trim() !== '';
-            if (hasResult) return;
-            const pickText = (row.getCell(4).value || '').toString().trim();
-            picksToCheck.push({ tipster, date, match, pick: pickText, sport: (sport || 'soccer').toLowerCase() });
-            console.log(`   → ${tipster} | ${date} | ${sport || 'soccer'} | ${match} | ${pickText}`);
-        });
+    for (const p of picksToCheck) {
+        console.log(`   → ${p.tipster} | ${p.date} | ${p.sport} | ${p.match} | ${p.pick}`);
     }
 
     if (picksToCheck.length === 0) {
@@ -459,10 +428,10 @@ async function runStandalone() {
             if (result) {
                 console.log(`[ResultsChecker]   Result: ${result}`);
                 if (!dryRun) {
-                    await excel.updatePickResult(pick, result);
-                    console.log(`[ResultsChecker]   Written to Excel`);
+                    await updatePickResult(pick, result);
+                    console.log(`[ResultsChecker]   Written to Sheet`);
                 } else {
-                    console.log(`[ResultsChecker]   (dry-run, skipped Excel write)`);
+                    console.log(`[ResultsChecker]   (dry-run, skipped Sheet write)`);
                 }
                 updated++;
             } else {

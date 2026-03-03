@@ -3,6 +3,9 @@ node_modules/
 
 # Local secrets - do NOT commit
 .env
+service-account.json
+oauth-client.json
+
 # WhatsApp Web session cache (should remain local)
 .wwebjs_auth/
 

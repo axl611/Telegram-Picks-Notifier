@@ -5,13 +5,13 @@ const https = require('https');
 // Tesseract replaced by Google Vision
 const config = require('./config');
 const { parsePicks } = require('./parser');
-const { initExcel, addPick, updateSummary } = require('./excel');
+const { initSheets, addPick, updateSummary } = require('./sheets');
 const { init: initResults, startResultsScheduler } = require('./results');
 const { initCache } = require('./odds-cache');
 
 
-// Initialize Excel - will create new file if missing, or load existing one
-initExcel().catch(err => console.error('Excel init error: ' + err.message));
+// Initialize Google Sheets - creates tabs if missing, sets headers/formatting
+initSheets().catch(err => console.error('Sheets init error: ' + err.message));
 
 // Initialize Odds API cache (fetches upcoming matches once on startup)
 initCache().catch(err => console.error('OddsCache init error: ' + err.message));
@@ -24,8 +24,8 @@ const MY_NAME = 'Axl';
 const ALERT_PREFIX = '🔔ALERT:';
 const HEARTBEAT_INTERVAL_MINUTES = 5;
 const COUNTERS_FILE = './counters.json';
-const CONTEXT_WINDOW_MS = 30 * 1000;
-const IMAGE_WAIT_MS = 5 * 1000;
+const CONTEXT_WINDOW_MS = 120 * 1000;
+const IMAGE_WAIT_MS = 15 * 1000;
 
 const TELEGRAM_TOKEN = config.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = config.TELEGRAM_CHAT_ID;
@@ -189,7 +189,7 @@ function openContextWindow(chatName, groupKey, label, name, sender, count) {
         delete contextWindows[chatName];
     }, CONTEXT_WINDOW_MS);
     contextWindows[chatName] = { groupKey, label, name, sender, count, timer };
-    console.log(timestamp() + ' Context window opened for "' + chatName + '" (' + label + ') - 30s');
+    console.log(timestamp() + ' Context window opened for "' + chatName + '" (' + label + ') - 2min');
 }
 
 function closeContextWindow(chatName) {
@@ -372,6 +372,7 @@ function createClient() {
                     await processImage(msg, alertMessage, media, ctx.name);
                     return;
                 }
+                console.log(timestamp() + ' Image received in "' + chatName + '" but no context window or pending alert — skipped.');
                 return;
             }
 
