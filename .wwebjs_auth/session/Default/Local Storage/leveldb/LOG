@@ -1,0 +1,14 @@
+2026/03/02-17:41:20.714 3892c Reusing MANIFEST /Users/axelramos/Documents/Picks Notifier/.wwebjs_auth/session/Default/Local Storage/leveldb/MANIFEST-000001
+2026/03/02-17:41:20.717 3892c Recovering log #13
+2026/03/02-17:41:20.717 3892c Reusing old log /Users/axelramos/Documents/Picks Notifier/.wwebjs_auth/session/Default/Local Storage/leveldb/000013.log 
+2026/03/02-18:01:28.304 3892f Level-0 table #17: started
+2026/03/02-18:01:28.308 3892f Level-0 table #17: 15093 bytes OK
+2026/03/02-18:01:28.312 3892f Delete type=0 #13
+2026/03/02-18:01:28.313 3892c Compacting 4@0 + 0@1 files
+2026/03/02-18:01:28.315 3892c Generated table #18@0: 95 keys, 6638 bytes
+2026/03/02-18:01:28.315 3892c Compacted 4@0 + 0@1 files => 6638 bytes
+2026/03/02-18:01:28.318 3892c compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/03/02-18:01:28.318 3892c Delete type=2 #14
+2026/03/02-18:01:28.318 3892c Delete type=2 #17
+2026/03/02-18:01:28.318 3892c Delete type=2 #7
+2026/03/02-18:01:28.318 3892c Delete type=2 #11
