@@ -3,6 +3,7 @@
 const https = require('https');
 const ExcelJS = require('exceljs');
 const path = require('path');
+const { findMatchFallback } = require('./fallback-scores');
 
 const EXCEL_FILE = path.join(process.cwd(), 'picks.xlsx');
 const BET_AMOUNT = 2000;
@@ -126,10 +127,15 @@ async function fetchScoresFromAPI(sport) {
     return allScores;
 }
 
-// Normalize strings for matching — strips OCR noise like "Sí", "FC", etc.
-const TEAM_NOISE_WORDS = new Set(['sí', 'si', 'no', 'yes', 'fc', 'cf', 'sc', 'ac', 'afc', 'bc']);
+// Normalize strings for matching — strips OCR noise, tipster names, betting terms
+const TEAM_NOISE_WORDS = new Set(['sí', 'si', 'no', 'yes', 'fc', 'cf', 'sc', 'ac', 'afc', 'bc',
+    'total', 'resultado', 'goles', 'ganador', 'marcador']);
 function norm(str) {
     return (str || '')
+        .replace(/\bel\s*abuelo\b/gi, '')
+        .replace(/\babuel(o|ito)\b/gi, '')
+        .replace(/\bcristian\s*rey\b/gi, '')
+        .replace(/\broberto\s*rey\b/gi, '')
         .split(/\s+/)
         .map(w => w.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, ''))
         .filter(w => w && !TEAM_NOISE_WORDS.has(w))
@@ -317,13 +323,27 @@ async function scheduleResultCheck(tipster, date, match, pick, odds, sport) {
         try {
             console.log(`   [Results] ── Checking result for: ${tipster} | ${date} | ${match} ──`);
 
-            const scores = await fetchScoresFromAPI(sportLower);
-            console.log(`   [Results] Got ${scores.length} score(s) for ${sportLower}`);
+            const teams = match.split(/\s+vs\.?\s+/i).map(t => norm(t));
+            let matchingScore = null;
 
-            const matchingScore = findScoreForPick({ match, sport }, scores);
+            // Try 365Scores first (free, covers all leagues)
+            if (teams.length >= 2) {
+                try {
+                    matchingScore = await findMatchFallback(date, teams[0], teams[1]);
+                    if (matchingScore) console.log(`   [Results] Found via 365Scores`);
+                } catch {}
+            }
+
+            // Fall back to Odds API if 365Scores missed it
+            if (!matchingScore) {
+                console.log(`   [Results] Not in 365Scores — trying Odds API...`);
+                const scores = await fetchScoresFromAPI(sportLower);
+                console.log(`   [Results] Got ${scores.length} score(s) for ${sportLower}`);
+                matchingScore = findScoreForPick({ match, sport }, scores);
+            }
 
             if (!matchingScore) {
-                console.log(`   [Results] ⚠️  No matching score found for: ${match}`);
+                console.log(`   [Results] No matching score found in any source for: ${match}`);
                 activeTimers.delete(pickId);
                 return;
             }

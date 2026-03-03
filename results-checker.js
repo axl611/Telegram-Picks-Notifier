@@ -8,6 +8,7 @@
 const https = require('https');
 const config = require('./config');
 const excel = require('./excel');
+const { findMatchFallback } = require('./fallback-scores');
 
 // Sport-specific delays (in milliseconds)
 const RESULT_CHECK_DELAYS = {
@@ -131,13 +132,17 @@ function fetchScoresFromAPI(sport, daysFrom = 1) {
     })();
 }
 
-// ── Clean team name: strip OCR/parser noise ──
-// \b doesn't work with accented chars (í, é, etc.), so split by spaces and filter
-const TEAM_NOISE_WORDS = new Set(['sí', 'si', 'no', 'yes', 'fc', 'cf', 'sc', 'ac', 'afc', 'bc']);
+// ── Clean team name: strip OCR/parser noise, tipster names, betting terms ──
+const TEAM_NOISE_WORDS = new Set(['sí', 'si', 'no', 'yes', 'fc', 'cf', 'sc', 'ac', 'afc', 'bc',
+    'total', 'resultado', 'goles', 'ganador', 'marcador']);
 function cleanTeamName(name) {
     return (name || '')
+        .replace(/\bel\s*abuelo\b/gi, '')
+        .replace(/\babuel(o|ito)\b/gi, '')
+        .replace(/\bcristian\s*rey\b/gi, '')
+        .replace(/\broberto\s*rey\b/gi, '')
         .split(/\s+/)
-        .filter(w => !TEAM_NOISE_WORDS.has(w.toLowerCase()))
+        .filter(w => w && !TEAM_NOISE_WORDS.has(w.toLowerCase()))
         .join(' ')
         .trim();
 }
@@ -267,9 +272,21 @@ async function scheduleResultCheck(pick, pickId) {
         try {
             console.log(`[ResultsChecker] Checking result for pick: ${pickId}`);
             
-            const scores = await fetchScoresFromAPI(sport);
-            const matchingScore = findScoreForPick(pick, scores);
-            
+            const teams = pick.match.split(/\s+vs\.?\s+/i).map(t => cleanTeamName(t));
+            let matchingScore = null;
+
+            // Try 365Scores first (free)
+            if (teams.length >= 2) {
+                try { matchingScore = await findMatchFallback(pick.date, teams[0], teams[1]); } catch {}
+            }
+
+            // Fall back to Odds API if needed
+            if (!matchingScore) {
+                console.log(`[ResultsChecker] Not in 365Scores — trying Odds API...`);
+                const scores = await fetchScoresFromAPI(sport);
+                matchingScore = findScoreForPick(pick, scores);
+            }
+
             if (!matchingScore) {
                 console.log(`[ResultsChecker] No matching score found for: ${pick.match}`);
                 activeTimers.delete(pickId);
@@ -404,34 +421,33 @@ async function runStandalone() {
         const picks = bySport[sport];
         console.log(`\n[ResultsChecker] ── ${sport.toUpperCase()} (${picks.length} pick(s)) ──`);
 
-        // Extract all team names from picks (for soccer league auto-discovery)
-        const allTeamNames = [];
-        for (const p of picks) {
-            const teams = p.match.split(/\s+vs\.?\s+/i).map(t => cleanTeamName(t));
-            allTeamNames.push(...teams);
-        }
-
-        let scores;
-        try {
-            scores = await fetchScoresForSport(sport, allTeamNames, daysFrom);
-        } catch (err) {
-            console.error(`[ResultsChecker] API error for ${sport}:`, err.message);
-            continue;
-        }
-
-        // Show completed games so you can verify API data
-        const completed = scores.filter(g => g.completed);
-        console.log(`[ResultsChecker] ${scores.length} game(s) returned, ${completed.length} completed.`);
-        for (const g of completed) {
-            const s0 = g.scores?.[0]; const s1 = g.scores?.[1];
-            console.log(`   ${g.home_team} ${s0?.score ?? '?'} - ${s1?.score ?? '?'} ${g.away_team}`);
-        }
-
         for (const pick of picks) {
             console.log(`\n[ResultsChecker] Checking: ${pick.tipster} | ${pick.match} | Pick: ${pick.pick}`);
-            const matchingScore = findScoreForPick(pick, scores);
+            const teams = pick.match.split(/\s+vs\.?\s+/i).map(t => cleanTeamName(t));
+
+            // 1) Try 365Scores first (free, covers all leagues)
+            let matchingScore = null;
+            if (teams.length >= 2) {
+                try {
+                    matchingScore = await findMatchFallback(pick.date, teams[0], teams[1]);
+                } catch (err) {
+                    console.log(`[ResultsChecker]   365Scores error: ${err.message}`);
+                }
+            }
+
+            // 2) Fall back to Odds API if 365Scores missed it
             if (!matchingScore) {
-                console.log(`[ResultsChecker]   No matching game in API for: ${pick.match}`);
+                console.log(`[ResultsChecker]   Not in 365Scores — trying Odds API (costs credits)...`);
+                try {
+                    const scores = await fetchScoresForSport(sport, teams, daysFrom);
+                    matchingScore = findScoreForPick(pick, scores);
+                } catch (err) {
+                    console.log(`[ResultsChecker]   Odds API error: ${err.message}`);
+                }
+            }
+
+            if (!matchingScore) {
+                console.log(`[ResultsChecker]   No matching game in any source for: ${pick.match}`);
                 continue;
             }
             console.log(`[ResultsChecker]   Matched: ${matchingScore.home_team} vs ${matchingScore.away_team} (completed=${matchingScore.completed})`);

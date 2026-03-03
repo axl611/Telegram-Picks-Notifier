@@ -6,11 +6,12 @@ const fs = require('fs');
 const EXCEL_FILE = path.join(process.cwd(), 'picks.xlsx');
 const CSV_FILE = path.join(process.cwd(), 'picks_backup.csv');
 const BET_AMOUNT = 2000;
+const STARTING_BALANCE = 50000;
 
 const TIPSTERS = ['Abuelo', 'Cristian Rey', 'Roberto Rey'];
 
 // Current schema version - increment when structure changes
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 // Expected columns for tipster sheets (v3 - no Time, no Type, combined Pick)
 const TIPSTER_COLUMNS = ['Date', 'Sport', 'Match', 'Pick', 'Odds', 'Bet', 'Result', 'Profit/Loss', 'Balance'];
@@ -319,6 +320,43 @@ async function migrateWorkbook(workbook, fromVersion) {
     }
     setColumnWidths(general, [12, 15, 10, 35, 30, 8, 10, 10, 14]);
 
+    // v3 -> v4: Fix Profit/Loss formula, Bet format, and Balance starting value
+    if (fromVersion < 4) {
+        console.log('   Fixing formulas and formats (v3 → v4)...');
+        for (const tipster of TIPSTERS) {
+            const sheet = workbook.getWorksheet(tipster);
+            if (!sheet) continue;
+            
+            sheet.eachRow((row, rowNum) => {
+                if (rowNum === 1) return;
+                
+                row.getCell(6).numFmt = '$#,##0.00';
+                
+                row.getCell(8).value = { formula: `IF(G${rowNum}="W",E${rowNum}*${BET_AMOUNT},IF(G${rowNum}="L",-${BET_AMOUNT},0))` };
+                row.getCell(8).numFmt = '$#,##0.00';
+                
+                if (rowNum === 2) {
+                    row.getCell(9).value = { formula: `${STARTING_BALANCE}+H${rowNum}` };
+                } else {
+                    row.getCell(9).value = { formula: `I${rowNum - 1}+H${rowNum}` };
+                }
+                row.getCell(9).numFmt = '$#,##0.00';
+            });
+        }
+        
+        const genSheet = workbook.getWorksheet('General');
+        if (genSheet) {
+            genSheet.eachRow((row, rowNum) => {
+                if (rowNum === 1) return;
+                
+                row.getCell(7).numFmt = '$#,##0.00';
+                
+                row.getCell(9).value = { formula: `IF(H${rowNum}="W",F${rowNum}*${BET_AMOUNT},IF(H${rowNum}="L",-${BET_AMOUNT},0))` };
+                row.getCell(9).numFmt = '$#,##0.00';
+            });
+        }
+    }
+
     // Ensure Summary sheet exists
     if (!workbook.getWorksheet('Summary')) {
         const summary = workbook.addWorksheet('Summary');
@@ -418,20 +456,18 @@ async function addPick(pickData) {
         const newRow = tipsterSheet.addRow(rowData);
         const rowNum = newRow.number;
         
-        // Add formula to Profit/Loss column (H): IF(G="W",(F-1)*2000,IF(G="L",-2000,0))
-        newRow.getCell(8).value = { formula: `IF(G${rowNum}="W",(F${rowNum}-1)*2000,IF(G${rowNum}="L",-2000,0))` };
+        newRow.getCell(6).numFmt = '$#,##0.00';
         
-        // Add formula to Balance column (I): running total
+        // Profit/Loss (H): Bet * Odds for win, -Bet for loss
+        newRow.getCell(8).value = { formula: `IF(G${rowNum}="W",E${rowNum}*${BET_AMOUNT},IF(G${rowNum}="L",-${BET_AMOUNT},0))` };
+        newRow.getCell(8).numFmt = '$#,##0.00';
+        
+        // Balance (I): starting at $50,000
         if (rowNum === 2) {
-            // First data row: Balance = Profit/Loss
-            newRow.getCell(9).value = { formula: `H${rowNum}` };
+            newRow.getCell(9).value = { formula: `${STARTING_BALANCE}+H${rowNum}` };
         } else {
-            // Subsequent rows: Balance = Previous Balance + This Profit/Loss
             newRow.getCell(9).value = { formula: `I${rowNum - 1}+H${rowNum}` };
         }
-        
-        // Format Profit/Loss column as currency
-        newRow.getCell(8).numFmt = '$#,##0.00';
         newRow.getCell(9).numFmt = '$#,##0.00';
         
         // Add data validation to Result column (G) - dropdown with W, L, P
@@ -460,8 +496,10 @@ async function addPick(pickData) {
         const newGeneralRow = generalSheet.addRow(generalRowData);
         const genRowNum = newGeneralRow.number;
         
-        // Add formula to Profit/Loss column (I): IF(H="W",(G-1)*2000,IF(H="L",-2000,0))
-        newGeneralRow.getCell(9).value = { formula: `IF(H${genRowNum}="W",(G${genRowNum}-1)*2000,IF(H${genRowNum}="L",-2000,0))` };
+        newGeneralRow.getCell(7).numFmt = '$#,##0.00';
+        
+        // Profit/Loss (I): Bet * Odds for win, -Bet for loss
+        newGeneralRow.getCell(9).value = { formula: `IF(H${genRowNum}="W",F${genRowNum}*${BET_AMOUNT},IF(H${genRowNum}="L",-${BET_AMOUNT},0))` };
         newGeneralRow.getCell(9).numFmt = '$#,##0.00';
         
         // Add data validation to Result column (H) - dropdown with W, L, P

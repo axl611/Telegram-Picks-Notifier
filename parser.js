@@ -219,9 +219,14 @@ async function parsePicks(ocrText, tipsterFromCaption) {
     const odds = extractOdds(fullText);
     console.log('   [Parser] Odds:', odds);
 
-    // Strip pick-related phrases BEFORE extracting teams so they don't leak into team names
-    // e.g. "Ambos anotan Sí Birmingham vs FC Middlesbrough" → "Birmingham vs FC Middlesbrough"
+    // Strip tipster names, pick phrases, and betting terms BEFORE extracting teams
     const matchText = fullText
+        // Tipster names
+        .replace(/\bel\s*abuelo\b/gi, '')
+        .replace(/\babuel(o|ito)\b/gi, '')
+        .replace(/\bcristian\s*rey\b/gi, '')
+        .replace(/\broberto\s*rey\b/gi, '')
+        // Pick phrases
         .replace(/ambos equipos marcan[:\s]*(sí|si|no|yes)?/gi, '')
         .replace(/ambos anotan[:\s]*(sí|si|no|yes)?/gi, '')
         .replace(/mbos equipos[:\s]*(sí|si|no|yes)?/gi, '')
@@ -234,6 +239,12 @@ async function parsePicks(ocrText, tipsterFromCaption) {
         .replace(/hándicap[:\s]*[+-]?\d+\.?\d*/gi, '')
         .replace(/\b(1x2|PA|ML|OU|AH|BTTS|SGP)\b/gi, '')
         .replace(/crear apuesta|misma apuesta/gi, '')
+        // Betting terms that leak into team names
+        .replace(/\btotal\s*(de\s*(goles|esquinas|tarjetas|puntos|sets))?\b/gi, '')
+        .replace(/\bresultado\b/gi, '')
+        .replace(/\bgoles\b/gi, '')
+        .replace(/\bganador\b/gi, '')
+        .replace(/\bmarcador\b/gi, '')
         .replace(/\s{2,}/g, ' ')
         .trim();
 
