@@ -3,6 +3,8 @@ node_modules/
 
 # Local secrets - do NOT commit
 .env
+# WhatsApp Web session cache (should remain local)
+.wwebjs_auth/
 
 # macOS
 .DS_Store
