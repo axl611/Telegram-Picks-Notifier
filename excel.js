@@ -418,4 +418,68 @@ async function updateSummary() {
     console.log('Summary updated.');
 }
 
-module.exports = { initExcel, addPick, updateSummary };
+// Update a pick's result (Win/Loss/Push) after game finishes
+async function updatePickResult(pick, result) {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(EXCEL_FILE);
+
+    const tipsterSheet = workbook.getWorksheet(pick.tipster);
+    const generalSheet = workbook.getWorksheet('General');
+
+    if (!tipsterSheet) {
+        console.error(`[Excel] Sheet not found for tipster: ${pick.tipster}`);
+        return;
+    }
+
+    // Map result to single letter
+    const resultLetter = result === 'Win' ? 'W' : result === 'Loss' ? 'L' : 'P';
+    const odds = parseFloat(pick.odds) || 0;
+    let profitLoss = 0;
+
+    if (resultLetter === 'W') {
+        profitLoss = (odds - 1) * BET_AMOUNT;
+    } else if (resultLetter === 'L') {
+        profitLoss = -BET_AMOUNT;
+    }
+    // Push = 0 profit/loss
+
+    // Find and update in tipster sheet
+    let found = false;
+    tipsterSheet.eachRow((row, rowNum) => {
+        if (rowNum === 1) return;
+
+        const rowDate = row.getCell(1).value;
+        const rowMatch = row.getCell(3).value;
+        
+        // Match by date and match name
+        if (rowDate === pick.date && rowMatch === pick.match) {
+            row.getCell(7).value = resultLetter;      // Result column
+            row.getCell(8).value = profitLoss;        // Profit/Loss column
+            found = true;
+        }
+    });
+
+    if (found) {
+        console.log(`[Excel] Updated result for ${pick.tipster}: ${pick.match} = ${resultLetter}`);
+    } else {
+        console.log(`[Excel] Warning: Could not find pick to update: ${pick.date} ${pick.match}`);
+    }
+
+    // Also update General sheet
+    generalSheet.eachRow((row, rowNum) => {
+        if (rowNum === 1) return;
+
+        const rowDate = row.getCell(1).value;
+        const rowTipster = row.getCell(2).value;
+        const rowMatch = row.getCell(4).value;
+
+        if (rowDate === pick.date && rowTipster === pick.tipster && rowMatch === pick.match) {
+            row.getCell(8).value = resultLetter;      // Result column
+            row.getCell(9).value = profitLoss;        // Profit/Loss column
+        }
+    });
+
+    await workbook.xlsx.writeFile(EXCEL_FILE);
+}
+
+module.exports = { initExcel, addPick, updateSummary, updatePickResult };

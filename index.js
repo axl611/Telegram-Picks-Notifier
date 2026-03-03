@@ -2,13 +2,21 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const https = require('https');
-const Tesseract = require('tesseract.js');
-// load configuration (loads .env in development)
+// Tesseract replaced by Google Vision
 const config = require('./config');
 const { parsePicks } = require('./parser');
 const { initExcel, addPick, updateSummary } = require('./excel');
+const { init: initResults, startResultsScheduler } = require('./results');
+const { initCache } = require('./odds-cache');
+
 
 initExcel().catch(err => console.error('Excel init error: ' + err.message));
+
+// Initialize Odds API cache (fetches upcoming matches once on startup)
+initCache().catch(err => console.error('OddsCache init error: ' + err.message));
+
+// Initialize results checker with credentials from .env
+initResults(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, config.ODDS_API_KEY);
 
 const TARGET_GROUPS = ['Axl', 'PRAIZA MAR26 👽💰 PICKS'];
 const MY_NAME = 'Axl';
@@ -89,11 +97,46 @@ function timestamp() {
 
 async function extractTextFromImage(base64Data) {
     try {
-        const buffer = Buffer.from(base64Data, 'base64');
-        const { data: { text } } = await Tesseract.recognize(buffer, 'spa+eng', { logger: () => {} });
-        return text.trim();
+        const apiKey = config.GOOGLE_VISION_KEY;
+        if (!apiKey) { console.error('No GOOGLE_VISION_KEY in .env'); return ''; }
+
+        const body = JSON.stringify({
+            requests: [{
+                image: { content: base64Data },
+                features: [{ type: 'TEXT_DETECTION', maxResults: 1 }]
+            }]
+        });
+
+        const result = await new Promise((resolve, reject) => {
+            const options = {
+                hostname: 'vision.googleapis.com',
+                path: '/v1/images:annotate?key=' + apiKey,
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+            };
+            const req = https.request(options, res => {
+                let raw = '';
+                res.on('data', c => raw += c);
+                res.on('end', () => {
+                    try { resolve(JSON.parse(raw)); }
+                    catch (e) { reject(new Error('Vision parse error: ' + raw.slice(0, 100))); }
+                });
+            });
+            req.on('error', reject);
+            req.write(body);
+            req.end();
+        });
+
+        const annotation = result.responses &&
+                           result.responses[0] &&
+                           result.responses[0].fullTextAnnotation;
+        if (!annotation) {
+            console.log('   Google Vision: no text found in image.');
+            return '';
+        }
+        return annotation.text.trim();
     } catch (err) {
-        console.error('Tesseract error: ' + err.message);
+        console.error('Google Vision error: ' + err.message);
         return '';
     }
 }
@@ -189,11 +232,25 @@ async function processImage(msg, alertMessage, media, tipsterFromCaption) {
 
             console.log('   OCR: ' + ocrText.replace(/\n/g, ' | '));
 
-            const picks = parsePicks(ocrText, tipsterFromCaption);
-            console.log('   Parsed ' + picks.length + ' pick(s).');
+            const picks = await parsePicks(ocrText, tipsterFromCaption);
+            console.log('   Parsed ' + picks.length + ' pick(s)');
+
+            const { scheduleResultCheck } = require('./results');
 
             for (const pick of picks) {
                 await addPick(pick);
+                
+                // Schedule result check with sport-specific delays
+                if (pick.sport) {
+                    scheduleResultCheck(
+                        pick.tipster,
+                        pick.date,
+                        pick.match,
+                        pick.pick,
+                        pick.odds,
+                        pick.sport
+                    );
+                }
             }
 
             await updateSummary();
@@ -222,6 +279,9 @@ function createClient() {
         console.log('\n✅ WhatsApp connected!');
         console.log('👀 Watching: ' + TARGET_GROUPS.join(', '));
         console.log('🔑 Tracking: Abuelo, Cristian, Roberto\n');
+
+        // Start results scheduler once WhatsApp is connected
+        startResultsScheduler();
     });
 
     client.on('auth_failure', () => {
