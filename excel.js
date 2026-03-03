@@ -35,7 +35,7 @@ async function initExcel() {
 
     // Create Summary sheet
     const summary = workbook.addWorksheet('Summary');
-    buildSummarySheet(summary, {});
+    buildSummarySheet(summary);
 
     // Add schema version marker (hidden)
     const infoSheet = workbook.addWorksheet('_Info');
@@ -59,12 +59,17 @@ function setColumnWidths(sheet, widths) {
     sheet.columns = widths.map((w, i) => ({ width: w }));
 }
 
-function buildSummarySheet(sheet, stats) {
-    sheet._merges = {};
-    
+function buildSummarySheet(sheet) {
+    // Clear any existing content
+    const rowCount = sheet.rowCount;
+    for (let i = rowCount; i >= 1; i--) {
+        sheet.spliceRows(i, 1);
+    }
+
     sheet.getCell('A1').value = 'PICKS TRACKER - SUMMARY';
     sheet.getCell('A1').font = { bold: true, size: 14, color: { argb: 'FF1F4E79' } };
 
+    // Headers: Row 2
     const headers = ['', 'Abuelo', 'Cristian Rey', 'Roberto Rey', 'TOTAL'];
     for (let i = 0; i < headers.length; i++) {
         const cell = sheet.getCell(2, i + 1);
@@ -74,48 +79,98 @@ function buildSummarySheet(sheet, stats) {
         cell.alignment = { horizontal: 'center' };
     }
 
-    const dataRows = [
-        ['Total Picks', 0, 0, 0, 0],
-        ['Wins', 0, 0, 0, 0],
-        ['Losses', 0, 0, 0, 0],
-        ['Pushes', 0, 0, 0, 0],
-        ['Win Rate %', '0%', '0%', '0%', '0%'],
-        ['Total Profit/Loss', '$0', '$0', '$0', '$0'],
-        ['Yield %', '0%', '0%', '0%', '0%'],
-    ];
+    // Row 3: Total Picks - Count rows with results (any value in Result column)
+    sheet.getCell(3, 1).value = 'Total Picks';
+    sheet.getCell(3, 1).font = { bold: true };
+    
+    sheet.getCell(3, 2).value = { formula: `COUNTA(Abuelo!A2:A1000)-COUNTA(Abuelo!G2:G1000)` };  // Count rows minus blanks in Result col
+    sheet.getCell(3, 3).value = { formula: `COUNTA('Cristian Rey'!A2:A1000)-COUNTA('Cristian Rey'!G2:G1000)` };
+    sheet.getCell(3, 4).value = { formula: `COUNTA('Roberto Rey'!A2:A1000)-COUNTA('Roberto Rey'!G2:G1000)` };
+    sheet.getCell(3, 5).value = { formula: `B3+C3+D3` };
 
-    if (stats && Object.keys(stats).length > 0) {
-        const tipsterList = TIPSTERS;
-        const totalWins = tipsterList.reduce((s, t) => s + (stats[t] ? stats[t].wins : 0), 0);
-        const totalLosses = tipsterList.reduce((s, t) => s + (stats[t] ? stats[t].losses : 0), 0);
-        const totalPushes = tipsterList.reduce((s, t) => s + (stats[t] ? stats[t].pushes : 0), 0);
-        const totalPicks = tipsterList.reduce((s, t) => s + (stats[t] ? stats[t].totalPicks : 0), 0);
-        const totalProfit = tipsterList.reduce((s, t) => s + (stats[t] ? stats[t].totalProfit : 0), 0);
-        const totalWinRate = totalPicks > 0 ? ((totalWins / totalPicks) * 100).toFixed(1) + '%' : '0%';
-        const totalYield = totalPicks > 0 ? ((totalProfit / (totalPicks * BET_AMOUNT)) * 100).toFixed(1) + '%' : '0%';
+    // Row 4: Wins - Count cells in Result column that equal "W"
+    sheet.getCell(4, 1).value = 'Wins';
+    sheet.getCell(4, 1).font = { bold: true };
+    
+    sheet.getCell(4, 2).value = { formula: `COUNTIF(Abuelo!G:G,"W")` };
+    sheet.getCell(4, 3).value = { formula: `COUNTIF('Cristian Rey'!G:G,"W")` };
+    sheet.getCell(4, 4).value = { formula: `COUNTIF('Roberto Rey'!G:G,"W")` };
+    sheet.getCell(4, 5).value = { formula: `B4+C4+D4` };
 
-        dataRows[0] = ['Total Picks', ...tipsterList.map(t => stats[t] ? stats[t].totalPicks : 0), totalPicks];
-        dataRows[1] = ['Wins', ...tipsterList.map(t => stats[t] ? stats[t].wins : 0), totalWins];
-        dataRows[2] = ['Losses', ...tipsterList.map(t => stats[t] ? stats[t].losses : 0), totalLosses];
-        dataRows[3] = ['Pushes', ...tipsterList.map(t => stats[t] ? stats[t].pushes : 0), totalPushes];
-        dataRows[4] = ['Win Rate %', ...tipsterList.map(t => stats[t] ? stats[t].winRate : '0%'), totalWinRate];
-        dataRows[5] = ['Total Profit/Loss', ...tipsterList.map(t => stats[t] ? '$' + stats[t].totalProfit.toFixed(2) : '$0'), '$' + totalProfit.toFixed(2)];
-        dataRows[6] = ['Yield %', ...tipsterList.map(t => stats[t] ? stats[t].yield_ : '0%'), totalYield];
+    // Row 5: Losses - Count cells in Result column that equal "L"
+    sheet.getCell(5, 1).value = 'Losses';
+    sheet.getCell(5, 1).font = { bold: true };
+    
+    sheet.getCell(5, 2).value = { formula: `COUNTIF(Abuelo!G:G,"L")` };
+    sheet.getCell(5, 3).value = { formula: `COUNTIF('Cristian Rey'!G:G,"L")` };
+    sheet.getCell(5, 4).value = { formula: `COUNTIF('Roberto Rey'!G:G,"L")` };
+    sheet.getCell(5, 5).value = { formula: `B5+C5+D5` };
+
+    // Row 6: Pushes - Count cells in Result column that equal "P"
+    sheet.getCell(6, 1).value = 'Pushes';
+    sheet.getCell(6, 1).font = { bold: true };
+    
+    sheet.getCell(6, 2).value = { formula: `COUNTIF(Abuelo!G:G,"P")` };
+    sheet.getCell(6, 3).value = { formula: `COUNTIF('Cristian Rey'!G:G,"P")` };
+    sheet.getCell(6, 4).value = { formula: `COUNTIF('Roberto Rey'!G:G,"P")` };
+    sheet.getCell(6, 5).value = { formula: `B6+C6+D6` };
+
+    // Row 7: Win Rate % = Wins / Total Picks (excluding pushes)
+    sheet.getCell(7, 1).value = 'Win Rate %';
+    sheet.getCell(7, 1).font = { bold: true };
+    
+    sheet.getCell(7, 2).value = { formula: `IF((B4+B5)=0,0,B4/(B4+B5))` };
+    sheet.getCell(7, 3).value = { formula: `IF((C4+C5)=0,0,C4/(C4+C5))` };
+    sheet.getCell(7, 4).value = { formula: `IF((D4+D5)=0,0,D4/(D4+D5))` };
+    sheet.getCell(7, 5).value = { formula: `IF((B4+B5+C4+C5+D4+D5)=0,0,(B4+C4+D4)/(B4+B5+C4+C5+D4+D5))` };
+
+    // Format Win Rate as percentage
+    for (let c = 2; c <= 5; c++) {
+        sheet.getCell(7, c).numFmt = '0.0%';
     }
 
-    for (let r = 0; r < dataRows.length; r++) {
-        for (let c = 0; c < dataRows[r].length; c++) {
-            const cell = sheet.getCell(r + 3, c + 1);
-            cell.value = dataRows[r][c];
-            if (c === 0) cell.font = { bold: true };
-        }
+    // Row 8: Total Profit/Loss - Sum of Profit/Loss column (H column)
+    sheet.getCell(8, 1).value = 'Total Profit/Loss';
+    sheet.getCell(8, 1).font = { bold: true };
+    
+    sheet.getCell(8, 2).value = { formula: `SUMIF(Abuelo!G:G,"W",Abuelo!H:H)+SUMIF(Abuelo!G:G,"L",Abuelo!H:H)` };
+    sheet.getCell(8, 3).value = { formula: `SUMIF('Cristian Rey'!G:G,"W",'Cristian Rey'!H:H)+SUMIF('Cristian Rey'!G:G,"L",'Cristian Rey'!H:H)` };
+    sheet.getCell(8, 4).value = { formula: `SUMIF('Roberto Rey'!G:G,"W",'Roberto Rey'!H:H)+SUMIF('Roberto Rey'!G:G,"L",'Roberto Rey'!H:H)` };
+    sheet.getCell(8, 5).value = { formula: `B8+C8+D8` };
+
+    // Format as currency
+    for (let c = 2; c <= 5; c++) {
+        sheet.getCell(8, c).numFmt = '$#,##0.00';
     }
 
+    // Row 9: Yield % = Total Profit / (Total Picks * Bet Amount) = Total Profit / Total Staked
+    sheet.getCell(9, 1).value = 'Yield %';
+    sheet.getCell(9, 1).font = { bold: true };
+    
+    // For each tipster: Profit / (Total Picks * 2000)
+    sheet.getCell(9, 2).value = { formula: `IF(B3=0,0,B8/(B3*2000))` };
+    sheet.getCell(9, 3).value = { formula: `IF(C3=0,0,C8/(C3*2000))` };
+    sheet.getCell(9, 4).value = { formula: `IF(D3=0,0,D8/(D3*2000))` };
+    sheet.getCell(9, 5).value = { formula: `IF(E3=0,0,E8/(E3*2000))` };
+
+    // Format Yield as percentage
+    for (let c = 2; c <= 5; c++) {
+        sheet.getCell(9, c).numFmt = '0.0%';
+    }
+
+    // Set column widths
     sheet.getColumn(1).width = 20;
     sheet.getColumn(2).width = 15;
     sheet.getColumn(3).width = 15;
     sheet.getColumn(4).width = 15;
     sheet.getColumn(5).width = 15;
+
+    // Center align all numeric cells
+    for (let r = 3; r <= 9; r++) {
+        for (let c = 2; c <= 5; c++) {
+            sheet.getCell(r, c).alignment = { horizontal: 'right' };
+        }
+    }
 }
 
 // ── Check and migrate schema if needed ──
@@ -378,44 +433,12 @@ async function updateSummary() {
         await workbook.xlsx.readFile(EXCEL_FILE);
     }
 
-    const stats = {};
-
-    for (const tipster of TIPSTERS) {
-        const sheet = workbook.getWorksheet(tipster);
-        if (!sheet) continue;
-
-        let wins = 0, losses = 0, pushes = 0, totalProfit = 0, totalPicks = 0;
-
-        sheet.eachRow((row, rowNum) => {
-            if (rowNum === 1) return;
-            // Columns: Date, Sport, Match, Pick, Odds, Bet, Result, Profit/Loss, Balance
-            const result = (row.getCell(7).value || '').toString().toUpperCase();
-            const odds = parseFloat(row.getCell(5).value) || 0;
-            if (result === 'W') { wins++; totalProfit += (odds - 1) * BET_AMOUNT; totalPicks++; }
-            else if (result === 'L') { losses++; totalProfit -= BET_AMOUNT; totalPicks++; }
-            else if (result === 'P') { pushes++; }
-        });
-
-        const winRate = totalPicks > 0 ? ((wins / totalPicks) * 100).toFixed(1) + '%' : '0%';
-        const totalBet = totalPicks * BET_AMOUNT;
-        const yield_ = totalBet > 0 ? ((totalProfit / totalBet) * 100).toFixed(1) + '%' : '0%';
-
-        stats[tipster] = { wins, losses, pushes, totalProfit, totalPicks, winRate, yield_ };
-        console.log('   [Summary] ' + tipster + ': ' + totalPicks + ' picks, ' + wins + 'W-' + losses + 'L-' + pushes + 'P');
-    }
-
-    // Rebuild summary
+    // Rebuild Summary sheet with live formulas
     const summarySheet = workbook.getWorksheet('Summary');
-    
-    const rowCount = summarySheet.rowCount;
-    for (let i = rowCount; i >= 1; i--) {
-        summarySheet.spliceRows(i, 1);
-    }
-    
-    buildSummarySheet(summarySheet, stats);
+    buildSummarySheet(summarySheet);
 
     await workbook.xlsx.writeFile(EXCEL_FILE);
-    console.log('Summary updated.');
+    console.log('   [Summary] Updated with live formulas');
 }
 
 // Update a pick's result (Win/Loss/Push) after game finishes
