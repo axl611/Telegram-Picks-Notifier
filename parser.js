@@ -219,12 +219,30 @@ async function parsePicks(ocrText, tipsterFromCaption) {
     const odds = extractOdds(fullText);
     console.log('   [Parser] Odds:', odds);
 
+    // Strip pick-related phrases BEFORE extracting teams so they don't leak into team names
+    // e.g. "Ambos anotan Sí Birmingham vs FC Middlesbrough" → "Birmingham vs FC Middlesbrough"
+    const matchText = fullText
+        .replace(/ambos equipos marcan[:\s]*(sí|si|no|yes)?/gi, '')
+        .replace(/ambos anotan[:\s]*(sí|si|no|yes)?/gi, '')
+        .replace(/mbos equipos[:\s]*(sí|si|no|yes)?/gi, '')
+        .replace(/btts[:\s]*(sí|si|no|yes)?/gi, '')
+        .replace(/m[aá]s de \d+\.?\d*/gi, '')
+        .replace(/menos de \d+\.?\d*/gi, '')
+        .replace(/over \d+\.?\d*/gi, '')
+        .replace(/under \d+\.?\d*/gi, '')
+        .replace(/handicap[:\s]*[+-]?\d+\.?\d*/gi, '')
+        .replace(/hándicap[:\s]*[+-]?\d+\.?\d*/gi, '')
+        .replace(/\b(1x2|PA|ML|OU|AH|BTTS|SGP)\b/gi, '')
+        .replace(/crear apuesta|misma apuesta/gi, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+
     // Extract match
     let match = null;
-    const garbage = /\b(Twit|Twitter|ML|OU|AH|BTTS|pe|pra|ar|CES|FE|LW|ET|ca)\b/gi;
+    const garbage = /\b(Twit|Twitter|pe|pra|ar|CES|FE|LW|ET|ca)\b/gi;
 
     // Try "Team A vs. Team B" first (also accept @ or other OCR artifacts)
-    const vsMatch = fullText.match(/([A-Za-záéíóúÁÉÍÓÚñÑ]+(?:\s+[A-Za-záéíóúÁÉÍÓÚñÑ]+)?)\s*(?:vs\.?|@|,)\s*([A-Za-záéíóúÁÉÍÓÚñÑ]+(?:\s+[A-Za-záéíóúÁÉÍÓÚñÑ]+)?)/i);
+    const vsMatch = matchText.match(/([A-Za-záéíóúÁÉÍÓÚñÑ]+(?:\s+[A-Za-záéíóúÁÉÍÓÚñÑ]+){0,3})\s*(?:vs\.?|@|,)\s*([A-Za-záéíóúÁÉÍÓÚñÑ]+(?:\s+[A-Za-záéíóúÁÉÍÓÚñÑ]+){0,3})/i);
     if (vsMatch) {
         const teamA = vsMatch[1].replace(garbage, '').trim();
         const teamB = vsMatch[2].replace(garbage, '').trim();
@@ -234,7 +252,7 @@ async function parsePicks(ocrText, tipsterFromCaption) {
     // Fallback: "ABC Team1 XYZ Team2" — two team-like tokens separated by known sport keywords
     // e.g. "BOS Celtics MIL Bucks" -> "BOS Celtics vs. MIL Bucks"
     if (!match) {
-        const slipMatch = fullText.match(/\b([A-Z]{2,3}\s+[A-Za-z]+)\s+([A-Z]{2,3}\s+[A-Za-z]+)\b/);
+        const slipMatch = matchText.match(/\b([A-Z]{2,3}\s+[A-Za-z]+)\s+([A-Z]{2,3}\s+[A-Za-z]+)\b/);
         if (slipMatch) {
             const teamA = slipMatch[1].trim();
             const teamB = slipMatch[2].trim();
@@ -243,9 +261,8 @@ async function parsePicks(ocrText, tipsterFromCaption) {
     }
 
     // Final fallback: Find any two known teams in the text, assume they're playing each other
-    // This handles cases where teams are separated by garbage/OCR artifacts
     if (!match) {
-        const foundTeams = findTeamsInText(fullText);
+        const foundTeams = findTeamsInText(matchText);
         if (foundTeams && foundTeams.length === 2) {
             // Validate and normalize team names via Odds API cache
             const validation = await validateAndNormalizeTeams(foundTeams[0], foundTeams[1]);

@@ -17,14 +17,23 @@ const RESULT_CHECK_DELAYS = {
     'nhl': 3 * 60 * 60 * 1000      // 3 hours
 };
 
-// Map from display sport names to API keys
+// Direct sport key for non-soccer sports
 const SPORT_API_KEYS = {
-    'soccer': 'soccer',
     'nba': 'basketball_nba',
     'mlb': 'baseball_mlb',
     'nfl': 'americanfootball_nfl',
     'nhl': 'icehockey_nhl'
 };
+
+// Common soccer leagues to try (auto-discovery not possible in timer context)
+const COMMON_SOCCER_LEAGUES = [
+    'soccer_epl', 'soccer_efl_champ', 'soccer_england_league1',
+    'soccer_spain_la_liga', 'soccer_germany_bundesliga',
+    'soccer_italy_serie_a', 'soccer_france_ligue_one',
+    'soccer_usa_mls', 'soccer_mexico_ligamx',
+    'soccer_uefa_champs_league', 'soccer_uefa_europa_league',
+    'soccer_brazil_campeonato', 'soccer_argentina_primera_division'
+];
 
 // Store active timers by pick ID so we can cancel if needed
 const activeTimers = new Map();
@@ -58,24 +67,23 @@ function sendTelegram(text) {
     });
 }
 
-// Fetch scores from Odds API
-function fetchScoresFromAPI(sport) {
+// Generic API GET
+function apiGet(urlPath) {
     return new Promise((resolve, reject) => {
-        const apiSport = SPORT_API_KEYS[sport.toLowerCase()] || sport;
-        const url = `/v4/sports/${apiSport}/scores?daysFrom=1&apiKey=${_oddsApiKey}`;
-        
         const req = https.request(
-            { hostname: 'api.the-odds-api.com', path: url, method: 'GET', headers: { Accept: 'application/json' } },
+            { hostname: 'api.the-odds-api.com', path: urlPath, method: 'GET', headers: { Accept: 'application/json' } },
             res => {
+                const remaining = res.headers['x-requests-remaining'];
+                if (remaining !== undefined) {
+                    console.log(`   [Results] API credits remaining: ${remaining}`);
+                }
                 let data = '';
                 res.on('data', chunk => { data += chunk; });
                 res.on('end', () => {
                     try {
                         const json = JSON.parse(data);
-                        console.log(`   [Results] Fetched scores for ${sport}: ${json.data?.length || 0} games`);
-                        resolve(json.data || []);
+                        resolve(Array.isArray(json) ? json : (json.data || []));
                     } catch (err) {
-                        console.error(`   [Results] Error parsing scores for ${sport}:`, err.message);
                         reject(err);
                     }
                 });
@@ -86,14 +94,46 @@ function fetchScoresFromAPI(sport) {
     });
 }
 
-// Normalize strings for matching
+// Fetch scores for a single sport key (2 credits with daysFrom)
+function fetchScoresByKey(sportKey) {
+    const url = `/v4/sports/${sportKey}/scores?daysFrom=1&apiKey=${_oddsApiKey}`;
+    return apiGet(url);
+}
+
+// Fetch scores — auto-resolves soccer to multiple league keys
+async function fetchScoresFromAPI(sport) {
+    const sportLower = sport.toLowerCase();
+    const directKey = SPORT_API_KEYS[sportLower];
+    if (directKey) {
+        const scores = await fetchScoresByKey(directKey);
+        console.log(`   [Results] Fetched scores for ${directKey}: ${scores.length} games`);
+        return scores;
+    }
+
+    // Soccer: try common leagues, collect all scores
+    console.log(`   [Results] Soccer — querying ${COMMON_SOCCER_LEAGUES.length} league(s)...`);
+    let allScores = [];
+    for (const key of COMMON_SOCCER_LEAGUES) {
+        try {
+            const scores = await fetchScoresByKey(key);
+            if (scores.length > 0) {
+                console.log(`   [Results] ${key}: ${scores.length} game(s)`);
+                allScores = allScores.concat(scores);
+            }
+        } catch { /* league may not be active */ }
+    }
+    console.log(`   [Results] Total soccer scores: ${allScores.length}`);
+    return allScores;
+}
+
+// Normalize strings for matching — strips OCR noise like "Sí", "FC", etc.
+const TEAM_NOISE_WORDS = new Set(['sí', 'si', 'no', 'yes', 'fc', 'cf', 'sc', 'ac', 'afc', 'bc']);
 function norm(str) {
     return (str || '')
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-z0-9 ]/g, '')
-        .replace(/\s+/g, ' ')
+        .split(/\s+/)
+        .map(w => w.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, ''))
+        .filter(w => w && !TEAM_NOISE_WORDS.has(w))
+        .join(' ')
         .trim();
 }
 
@@ -217,6 +257,37 @@ function generatePickId(tipster, date, match) {
     return `${tipster}|${date}|${match}`.replace(/\s+/g, '_');
 }
 
+// Normalize date for comparison (Excel may return Date object or string like "2 Mar")
+function normalizeDateForCompare(val) {
+    if (val == null || val === '') return '';
+    if (val instanceof Date) {
+        return val.getDate() + ' ' + val.toLocaleString('en', { month: 'short' });
+    }
+    const s = String(val).trim();
+    return s;
+}
+
+// Normalize match for comparison (trim, collapse spaces; Excel may truncate with "...")
+function normalizeMatchForCompare(val) {
+    if (val == null) return '';
+    return String(val).replace(/\s+/g, ' ').trim();
+}
+
+function datesMatch(a, b) {
+    const na = normalizeDateForCompare(a);
+    const nb = normalizeDateForCompare(b);
+    return na === nb;
+}
+
+function matchesMatch(rowMatch, pickMatch) {
+    const r = normalizeMatchForCompare(rowMatch);
+    const p = normalizeMatchForCompare(pickMatch);
+    if (r === p) return true;
+    // Excel truncates match at 60 chars (55 + '...'), so check if one starts the other
+    if (r.startsWith(p) || p.startsWith(r)) return true;
+    return false;
+}
+
 // Schedule result check for a pick
 async function scheduleResultCheck(tipster, date, match, pick, odds, sport) {
     if (!sport) {
@@ -244,19 +315,23 @@ async function scheduleResultCheck(tipster, date, match, pick, odds, sport) {
     // Schedule the check
     const timer = setTimeout(async () => {
         try {
-            console.log(`   [Results] Checking: ${match}`);
+            console.log(`   [Results] ── Checking result for: ${tipster} | ${date} | ${match} ──`);
 
             const scores = await fetchScoresFromAPI(sportLower);
+            console.log(`   [Results] Got ${scores.length} score(s) for ${sportLower}`);
+
             const matchingScore = findScoreForPick({ match, sport }, scores);
 
             if (!matchingScore) {
-                console.log(`   [Results] ⚠️  No matching score found: ${match}`);
+                console.log(`   [Results] ⚠️  No matching score found for: ${match}`);
                 activeTimers.delete(pickId);
                 return;
             }
 
+            console.log(`   [Results] Found game: ${matchingScore.home_team} vs ${matchingScore.away_team}, completed=${matchingScore.completed}`);
+
             if (!matchingScore.completed) {
-                console.log(`   [Results] Game not completed yet: ${match}`);
+                console.log(`   [Results] Game not completed yet, rescheduling in 5min: ${match}`);
                 // Reschedule for 5 minutes later
                 const retryTimer = setTimeout(() => {
                     scheduleResultCheck(tipster, date, match, pick, odds, sport);
@@ -270,9 +345,12 @@ async function scheduleResultCheck(tipster, date, match, pick, odds, sport) {
             if (result) {
                 const pl = calcPL(result, odds);
 
+                console.log(`   [Results] Updating Excel: tipster=${tipster}, date=${date}, match=${match}, result=${result}`);
+
                 // Update Excel
                 let workbook = new ExcelJS.Workbook();
                 await workbook.xlsx.readFile(EXCEL_FILE);
+                console.log(`   [Results] Loaded workbook, looking for row...`);
 
                 const tipsterSheet = workbook.getWorksheet(tipster);
                 const generalSheet = workbook.getWorksheet('General');
@@ -285,14 +363,17 @@ async function scheduleResultCheck(tipster, date, match, pick, odds, sport) {
 
                 let found = false;
 
-                // Find and update in tipster sheet
+                // Find and update in tipster sheet (use normalized date/match comparison)
                 tipsterSheet.eachRow((row, rowNum) => {
                     if (rowNum === 1) return;
 
-                    const rowDate = (row.getCell(1).value || '').toString();
-                    const rowMatch = (row.getCell(3).value || '').toString();
+                    const rowDate = row.getCell(1).value;
+                    const rowMatch = row.getCell(3).value;
 
-                    if (rowDate === date && rowMatch === match) {
+                    const dateOk = datesMatch(rowDate, date);
+                    const matchOk = matchesMatch(rowMatch, match);
+
+                    if (dateOk && matchOk) {
                         row.getCell(7).value = result;      // Result column ONLY
                         // Profit/Loss (column 8) and Balance (column 9) are formula-based - they auto-calculate
 
@@ -301,25 +382,29 @@ async function scheduleResultCheck(tipster, date, match, pick, odds, sport) {
                         row.getCell(7).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors[result] } };
 
                         found = true;
+                        console.log(`   [Results] Matched tipster row ${rowNum}: date=${normalizeDateForCompare(rowDate)}, match=${normalizeMatchForCompare(rowMatch)}`);
                     }
                 });
 
                 if (found) {
                     // Also update General sheet
-                    generalSheet.eachRow((row, rowNum) => {
+                    let generalUpdated = 0;
+                    if (generalSheet) generalSheet.eachRow((row, rowNum) => {
                         if (rowNum === 1) return;
 
-                        const rowDate = (row.getCell(1).value || '').toString();
-                        const rowTipster = (row.getCell(2).value || '').toString();
-                        const rowMatch = (row.getCell(4).value || '').toString();
+                        const rowDate = row.getCell(1).value;
+                        const rowTipster = (row.getCell(2).value || '').toString().trim();
+                        const rowMatch = row.getCell(4).value;
 
-                        if (rowDate === date && rowTipster === tipster && rowMatch === match) {
+                        if (datesMatch(rowDate, date) && rowTipster === tipster && matchesMatch(rowMatch, match)) {
                             row.getCell(8).value = result;   // Result column ONLY
-                            // Profit/Loss (column 9) is formula-based - it auto-calculates
+                            generalUpdated++;
                         }
                     });
+                    if (generalSheet) console.log(`   [Results] Updated General sheet: ${generalUpdated} row(s)`);
 
                     await workbook.xlsx.writeFile(EXCEL_FILE);
+                    console.log(`   [Results] Saved picks.xlsx`);
 
                     // Update summary (rebuilds formulas)
                     const { updateSummary } = require('./excel');
@@ -336,6 +421,8 @@ async function scheduleResultCheck(tipster, date, match, pick, odds, sport) {
                         `*Odds:* ${odds}\n` +
                         `*P&L:* $${pl}`
                     );
+                } else {
+                    console.log(`   [Results] No matching row in Excel for date="${date}" match="${match}" (tipster=${tipster}). Check date format in sheet (e.g. "2 Mar").`);
                 }
             } else {
                 console.log(`   [Results] Could not evaluate pick: ${match} | ${pick}`);

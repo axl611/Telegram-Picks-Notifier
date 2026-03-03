@@ -1,8 +1,10 @@
 // excel.js - Excel manager for picks tracking
 const ExcelJS = require('exceljs');
 const path = require('path');
+const fs = require('fs');
 
 const EXCEL_FILE = path.join(process.cwd(), 'picks.xlsx');
+const CSV_FILE = path.join(process.cwd(), 'picks_backup.csv');
 const BET_AMOUNT = 2000;
 
 const TIPSTERS = ['Abuelo', 'Cristian Rey', 'Roberto Rey'];
@@ -17,8 +19,6 @@ const TIPSTER_COLUMNS = ['Date', 'Sport', 'Match', 'Pick', 'Odds', 'Bet', 'Resul
 const GENERAL_COLUMNS = ['Date', 'Tipster', 'Sport', 'Match', 'Pick', 'Odds', 'Bet', 'Result', 'Profit/Loss'];
 
 async function initExcel() {
-    const fs = require('fs');
-    
     // Check if file already exists
     if (fs.existsSync(EXCEL_FILE)) {
         console.log('Excel file already exists: ' + EXCEL_FILE);
@@ -191,8 +191,13 @@ async function ensureSchema() {
         workbook = new ExcelJS.Workbook();
         await workbook.xlsx.readFile(EXCEL_FILE);
     } catch (err) {
-        // File doesn't exist or is corrupted - create new
-        console.log('   Creating new Excel file...');
+        if (fs.existsSync(EXCEL_FILE)) {
+            // File exists but couldn't be read (locked or temporarily unavailable) — never delete it
+            console.error('   Could not read Excel file (may be locked or in use): ' + err.message);
+            return null;
+        }
+        // File genuinely missing — create a fresh one
+        console.log('   Excel file not found, creating new one...');
         await initExcel();
         return null;
     }
@@ -469,6 +474,10 @@ async function addPick(pickData) {
     }
 
     await workbook.xlsx.writeFile(EXCEL_FILE);
+
+    // Append to CSV backup
+    appendPickToCsv(tipsterName, pickData);
+
     console.log('Pick saved: ' + tipsterName + ' | ' + pickData.match + ' | ' + pickData.pick + ' | Odds: ' + pickData.odds);
 }
 
@@ -489,8 +498,36 @@ async function updateSummary() {
     console.log('   [Summary] Updated with live formulas');
 }
 
+// Normalize date for comparison (Excel may return Date object or string)
+function normalizeDateForCompare(val) {
+    if (val == null || val === '') return '';
+    if (val instanceof Date) {
+        return val.getDate() + ' ' + val.toLocaleString('en', { month: 'short' });
+    }
+    return String(val).trim();
+}
+
+// Normalize match for comparison (Excel may truncate with "...")
+function normalizeMatchForCompare(val) {
+    if (val == null) return '';
+    return String(val).replace(/\s+/g, ' ').trim();
+}
+
+function datesMatchExcel(a, b) {
+    return normalizeDateForCompare(a) === normalizeDateForCompare(b);
+}
+
+function matchesMatchExcel(rowMatch, pickMatch) {
+    const r = normalizeMatchForCompare(rowMatch);
+    const p = normalizeMatchForCompare(pickMatch);
+    if (r === p) return true;
+    if (r.startsWith(p) || p.startsWith(r)) return true;
+    return false;
+}
+
 // Update a pick's result (Win/Loss/Push) after game finishes
 async function updatePickResult(pick, result) {
+    console.log(`[Excel] updatePickResult called: tipster=${pick.tipster}, date=${pick.date}, match=${pick.match}, result=${result}`);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(EXCEL_FILE);
 
@@ -505,43 +542,151 @@ async function updatePickResult(pick, result) {
     // Map result to single letter
     const resultLetter = result === 'Win' ? 'W' : result === 'Loss' ? 'L' : 'P';
 
-    // Find and update in tipster sheet
+    // Find and update in tipster sheet (use normalized comparison)
     let found = false;
     tipsterSheet.eachRow((row, rowNum) => {
         if (rowNum === 1) return;
 
         const rowDate = row.getCell(1).value;
         const rowMatch = row.getCell(3).value;
-        
-        // Match by date and match name
-        if (rowDate === pick.date && rowMatch === pick.match) {
-            row.getCell(7).value = resultLetter;      // Result column only
-            // Profit/Loss (column 8) and Balance (column 9) are now formula-based - no need to update
+
+        if (datesMatchExcel(rowDate, pick.date) && matchesMatchExcel(rowMatch, pick.match)) {
+            row.getCell(7).value = resultLetter;
             found = true;
+            console.log(`[Excel] Updated tipster row ${rowNum}: ${resultLetter}`);
         }
     });
 
     if (found) {
         console.log(`[Excel] Updated result for ${pick.tipster}: ${pick.match} = ${resultLetter}`);
     } else {
-        console.log(`[Excel] Warning: Could not find pick to update: ${pick.date} ${pick.match}`);
+        console.log(`[Excel] Warning: Could not find pick to update: date="${pick.date}" match="${pick.match}"`);
     }
 
     // Also update General sheet
-    generalSheet.eachRow((row, rowNum) => {
-        if (rowNum === 1) return;
+    if (generalSheet) {
+        generalSheet.eachRow((row, rowNum) => {
+            if (rowNum === 1) return;
 
-        const rowDate = row.getCell(1).value;
-        const rowTipster = row.getCell(2).value;
-        const rowMatch = row.getCell(4).value;
+            const rowDate = row.getCell(1).value;
+            const rowTipster = (row.getCell(2).value || '').toString().trim();
+            const rowMatch = row.getCell(4).value;
 
-        if (rowDate === pick.date && rowTipster === pick.tipster && rowMatch === pick.match) {
-            row.getCell(8).value = resultLetter;      // Result column only
-            // Profit/Loss (column 9) is now formula-based - no need to update
-        }
-    });
+            if (datesMatchExcel(rowDate, pick.date) && rowTipster === pick.tipster && matchesMatchExcel(rowMatch, pick.match)) {
+                row.getCell(8).value = resultLetter;
+            }
+        });
+    }
 
     await workbook.xlsx.writeFile(EXCEL_FILE);
+
+    // Update CSV backup with result
+    updateResultInCsv(pick.tipster, pick.date, pick.match, resultLetter);
+
+    console.log(`[Excel] Saved picks.xlsx`);
+}
+
+// ── CSV Backup (append-only fallback so data is never lost) ──
+
+const CSV_HEADERS = 'Timestamp,Tipster,Date,Sport,Match,Pick,Odds,Bet,Result';
+
+function escapeCsv(val) {
+    const s = String(val ?? '');
+    if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+        return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+}
+
+function ensureCsvFile() {
+    if (!fs.existsSync(CSV_FILE)) {
+        fs.writeFileSync(CSV_FILE, CSV_HEADERS + '\n', 'utf8');
+        console.log('[CSV] Created backup file: ' + CSV_FILE);
+    }
+}
+
+function appendPickToCsv(tipster, pickData) {
+    try {
+        ensureCsvFile();
+        const row = [
+            new Date().toISOString(),
+            escapeCsv(tipster),
+            escapeCsv(pickData.date),
+            escapeCsv(pickData.sport),
+            escapeCsv(pickData.match),
+            escapeCsv(pickData.pick),
+            escapeCsv(pickData.odds),
+            BET_AMOUNT,
+            ''
+        ].join(',');
+        fs.appendFileSync(CSV_FILE, row + '\n', 'utf8');
+    } catch (err) {
+        console.error('[CSV] Backup write error: ' + err.message);
+    }
+}
+
+function updateResultInCsv(tipster, date, match, result) {
+    try {
+        if (!fs.existsSync(CSV_FILE)) return;
+        const lines = fs.readFileSync(CSV_FILE, 'utf8').split('\n');
+        const normMatch = (val) => String(val ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const normDate = (val) => String(val ?? '').trim().toLowerCase();
+        let updated = false;
+        for (let i = 1; i < lines.length; i++) {
+            if (!lines[i].trim()) continue;
+            // Parse CSV line (handles quoted fields)
+            const fields = parseCsvLine(lines[i]);
+            if (!fields || fields.length < 9) continue;
+            const csvTipster = fields[1].trim();
+            const csvDate = fields[2].trim();
+            const csvMatch = fields[4].trim();
+            const csvResult = fields[8].trim();
+            if (csvResult) continue; // already has a result
+            if (csvTipster !== tipster) continue;
+            if (normDate(csvDate) !== normDate(date)) continue;
+            if (normMatch(csvMatch) !== normMatch(match) &&
+                !normMatch(csvMatch).startsWith(normMatch(match)) &&
+                !normMatch(match).startsWith(normMatch(csvMatch))) continue;
+            fields[8] = result;
+            lines[i] = fields.map(f => escapeCsv(f)).join(',');
+            updated = true;
+        }
+        if (updated) {
+            fs.writeFileSync(CSV_FILE, lines.join('\n'), 'utf8');
+        }
+    } catch (err) {
+        console.error('[CSV] Backup result update error: ' + err.message);
+    }
+}
+
+function parseCsvLine(line) {
+    const fields = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (inQuotes) {
+            if (ch === '"' && line[i + 1] === '"') {
+                current += '"';
+                i++;
+            } else if (ch === '"') {
+                inQuotes = false;
+            } else {
+                current += ch;
+            }
+        } else {
+            if (ch === '"') {
+                inQuotes = true;
+            } else if (ch === ',') {
+                fields.push(current);
+                current = '';
+            } else {
+                current += ch;
+            }
+        }
+    }
+    fields.push(current);
+    return fields;
 }
 
 module.exports = { initExcel, addPick, updateSummary, updatePickResult };
