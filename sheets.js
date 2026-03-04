@@ -17,13 +17,15 @@ let spreadsheetId;
 async function ensureApi() {
     if (api) return;
 
-    const credFile = process.env.GOOGLE_CREDENTIALS_FILE || path.join(process.cwd(), 'service-account.json');
+    const serviceAccountFile = process.env.GOOGLE_CREDENTIALS_FILE || path.join(process.cwd(), 'service-account.json');
+    const oauthClientFile = path.join(process.cwd(), 'oauth-client.json');
+    const tokenFile = path.join(process.cwd(), 'oauth-token.json');
 
     let auth;
-    if (fs.existsSync(credFile)) {
+    if (fs.existsSync(serviceAccountFile)) {
         // Service account JSON key file
         auth = new google.auth.GoogleAuth({
-            keyFile: credFile,
+            keyFile: serviceAccountFile,
             scopes: ['https://www.googleapis.com/auth/spreadsheets'],
         });
     } else if (process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
@@ -35,6 +37,89 @@ async function ensureApi() {
             },
             scopes: ['https://www.googleapis.com/auth/spreadsheets'],
         });
+    } else if (fs.existsSync(oauthClientFile)) {
+        // OAuth 2.0 client credentials with token caching
+        const credentials = JSON.parse(fs.readFileSync(oauthClientFile, 'utf8'));
+        const { client_id, client_secret, redirect_uris } = credentials.installed;
+        
+        auth = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+
+        // Try to load cached token
+        if (fs.existsSync(tokenFile)) {
+            const token = JSON.parse(fs.readFileSync(tokenFile, 'utf8'));
+            auth.setCredentials(token);
+        } else {
+            // Need to generate new token - use automatic server capture
+            const scopes = ['https://www.googleapis.com/auth/spreadsheets'];
+            const authUrl = auth.generateAuthUrl({
+                access_type: 'offline',
+                scope: scopes,
+            });
+            
+            console.log('\n🔐 Starting OAuth authorization flow...');
+            console.log('Opening browser at: http://localhost:3000\n');
+            
+            return new Promise((resolve, reject) => {
+                const http = require('http');
+                const server = http.createServer(async (req, res) => {
+                    const url = new URL(req.url, 'http://localhost');
+                    const code = url.searchParams.get('code');
+                    
+                    if (code) {
+                        try {
+                            const { tokens } = await auth.getToken(code);
+                            auth.setCredentials(tokens);
+                            fs.writeFileSync(tokenFile, JSON.stringify(tokens));
+                            
+                            res.writeHead(200, { 'Content-Type': 'text/html' });
+                            res.end(`
+                                <!DOCTYPE html>
+                                <html>
+                                <head><title>Authorization Successful</title></head>
+                                <body style="font-family: Arial; text-align: center; padding: 50px;">
+                                    <h1>✅ Authorization Successful!</h1>
+                                    <p>You can close this window and return to the terminal.</p>
+                                </body>
+                                </html>
+                            `);
+                            
+                            server.close();
+                            console.log('✓ Authorization successful! Token saved.\n');
+                            api = google.sheets({ version: 'v4', auth });
+                            spreadsheetId = process.env.GOOGLE_SHEET_ID;
+                            if (!spreadsheetId) throw new Error('GOOGLE_SHEET_ID missing in .env');
+                            resolve();
+                        } catch (err) {
+                            res.writeHead(400, { 'Content-Type': 'text/html' });
+                            res.end(`
+                                <!DOCTYPE html>
+                                <html>
+                                <head><title>Authorization Failed</title></head>
+                                <body style="font-family: Arial; text-align: center; padding: 50px; color: red;">
+                                    <h1>❌ Authorization Failed</h1>
+                                    <p>${err.message}</p>
+                                </body>
+                                </html>
+                            `);
+                            server.close();
+                            reject(new Error('Failed to get OAuth token: ' + err.message));
+                        }
+                    } else {
+                        // Redirect to Google OAuth
+                        res.writeHead(302, { Location: authUrl });
+                        res.end();
+                    }
+                });
+                
+                server.listen(3000, '127.0.0.1', () => {
+                    console.log('📱 Visit this link in your browser:\n');
+                    console.log('  http://localhost:3000\n');
+                    console.log('(or click directly to authorize)\n');
+                });
+                
+                server.on('error', reject);
+            });
+        }
     } else {
         // Application Default Credentials (gcloud auth application-default login)
         auth = new google.auth.GoogleAuth({

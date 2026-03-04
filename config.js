@@ -4,10 +4,11 @@
 require('dotenv').config();
 
 const config = {
-  TELEGRAM_TOKEN:  process.env.TELEGRAM_TOKEN  || '',
-  TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID || '',
-  ODDS_API_KEY:        process.env.ODDS_API_KEY        || '',
-  GOOGLE_VISION_KEY:   process.env.GOOGLE_VISION_KEY   || '',
+  TELEGRAM_TOKEN:    process.env.TELEGRAM_TOKEN    || '',
+  TELEGRAM_CHAT_ID:  process.env.TELEGRAM_CHAT_ID  || '',
+  ODDS_API_KEY:      process.env.ODDS_API_KEY      || '',
+  GOOGLE_VISION_KEY: process.env.GOOGLE_VISION_KEY || '',
+  GOOGLE_SHEET_ID:   process.env.GOOGLE_SHEET_ID   || '',
 };
 
 module.exports = config;
